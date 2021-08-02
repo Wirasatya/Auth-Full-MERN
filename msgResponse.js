@@ -8,7 +8,8 @@ const msg = {
   invalidEmail: "Invalid emails.",
   emailAlreadyExist: "This email already exists.",
   passwordMust6Length: "Password must be at least 6 characters.",
-  successRegister: "Register Success! Please activate your email to start.",
+  successRegisterPleaseActivated:
+    "Register Success! Please activate your email to start.",
   accountActivated: "Account has been activated!",
   emailNotExist: "This email does not exist.",
   incorrectPass: "Password is incorrect.",

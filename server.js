@@ -37,7 +37,7 @@ mongoose.connect(
 );
 
 // routes
-// app.use("/user", require("./routes/User.route"));
+app.use("/user", require("./routes/User.route"));
 
 // listen
 app.listen(PORT, () => {
