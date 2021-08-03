@@ -8,6 +8,8 @@ const { google } = require("googleapis");
 const { OAuth2 } = google.auth;
 const fetch = require("node-fetch");
 
+const client = new OAuth2(process.env.MAILING_SERVICE_CLIENT_ID);
+
 const { CLIENT_URL } = process.env;
 
 const userCtrl = {
@@ -79,7 +81,7 @@ const userCtrl = {
   login: async (req, res) => {
     try {
       const { email, password } = req.body; // const email = req.body.email
-      const user = Users.findOne({ email }); //findOne match email from mongoDB
+      const user = await Users.findOne({ email }); //findOne match email from mongoDB
       if (!user) return res.status(400).json({ msg: resMsg.emailNotExist }); //email not exist on mongoDB
 
       const isMatch = await bcrypt.compare(password, user.password); //compare password from client and mongoDB
@@ -110,23 +112,22 @@ const userCtrl = {
         res.json({ access_token }); // res value of access_token
       });
     } catch (err) {
-      return res.status(500).json({ msg: err.message }); // something wrong on route user/accessToken
+      return res.status(500).json({ msg: err.message }); // something wrong on route user/refresh_token
     }
   },
   forgotPassword: async (req, res) => {
     try {
       const { email } = req.body; // set email value from req.body.email
       const user = await Users.findOne({ email }); //findOne match email from mongoDB
-      if (!user)
-        return res.status(400).json({ msg: "This email does not exist." }); // email doesn't exist on mongodb
+      if (!user) return res.status(400).json({ msg: resMsg.emailNotExist }); // email doesn't exist on mongodb
 
       const access_token = createAccessToken({ id: user._id }); // create access_token
       const url = `${CLIENT_URL}/user/reset/${access_token}`; // url reset password
 
       sendEmail(email, url, "Reset your password"); // send email to user who forgot the password
-      res.json({ msg: "Re-send the password, please check your email." }); // response email abaut reset pass has been sent to his/her email
+      res.json({ msg: resMsg.resendPassCheckEmail }); // response email abaut reset pass has been sent to his/her email
     } catch (err) {
-      return res.status(500).json({ msg: err.message }); // something wrong on route user/resetPassword
+      return res.status(500).json({ msg: err.message }); // something wrong on route user/forgot
     }
   },
   resetPassword: async (req, res) => {
@@ -142,7 +143,130 @@ const userCtrl = {
         }
       ); // find a user and update a password from mongodb
 
-      res.json({ msg: "Password successfully changed!" }); // a password successfully changed
+      res.json({ msg: resMsg.changePassSuccess }); // a password successfully changed
+    } catch (err) {
+      return res.status(500).json({ msg: err.message }); // something wrong on route user/reset
+    }
+  },
+  getUserInfor: async (req, res) => {
+    try {
+      const user = await Users.findById(req.user.id).select("-password"); // get all data from user except his/her pass
+
+      res.json(user); //response user data
+    } catch (err) {
+      return res.status(500).json({ msg: err.message }); //something  wrong on route user/infor
+    }
+  },
+  getUsersAllInfor: async (req, res) => {
+    try {
+      const users = await Users.find().select("-password"); // get all user and his/her data except pass
+
+      res.json(users); // response all user
+    } catch (err) {
+      return res.status(500).json({ msg: err.message }); // something wrong on route user/all_infor
+    }
+  },
+  logout: async (req, res) => {
+    try {
+      res.clearCookie("refreshtoken", { path: "/user/refresh_token" }); // clear refresh token on cookie before logout
+      return res.json({ msg: resMsg.logout }); // logout successfully
+    } catch (err) {
+      return res.status(500).json({ msg: err.message }); // somethingwrong on route user/logout
+    }
+  },
+  updateUser: async (req, res) => {
+    try {
+      const { name, avatar } = req.body; // set value name, avatar by req.body.name/avatar
+      await Users.findOneAndUpdate(
+        { _id: req.user.id },
+        {
+          name,
+          avatar,
+        }
+      ); // find a match from payload access token then update name and avatar
+
+      res.json({ msg: resMsg.updateSuccess }); // update success
+    } catch (err) {
+      return res.status(500).json({ msg: err.message }); // something wrong on route user/update
+    }
+  },
+  updateUsersRole: async (req, res) => {
+    try {
+      const { role } = req.body; // set value role by req.body.role
+
+      await Users.findOneAndUpdate(
+        { _id: req.params.id },
+        {
+          role,
+        }
+      ); // find a match from req.params.id then update role (only role admin can do it)
+
+      res.json({ msg: resMsg.updateSuccess }); // update role success
+    } catch (err) {
+      return res.status(500).json({ msg: err.message }); // something wrong on route user/update_role/:id
+    }
+  },
+  deleteUser: async (req, res) => {
+    try {
+      await Users.findByIdAndDelete(req.params.id); // find a match user by req.params.id and delete it (only admin can do it)
+
+      res.json({ msg: resMsg.deleteSuccess }); // delete user successfully
+    } catch (err) {
+      return res.status(500).json({ msg: err.message }); //something wrong on route user/delete/:id
+    }
+  },
+  googleLogin: async (req, res) => {
+    try {
+      const { tokenId } = req.body; // set value of tokenId by req.body.tokenId
+
+      const verify = await client.verifyIdToken({
+        idToken: tokenId,
+        audience: process.env.MAILING_SERVICE_CLIENT_ID,
+      }); // get data payload from google login
+
+      const { email_verified, email, name, picture } = verify.payload; // set data payload to spesifik value
+
+      const password = email + process.env.GOOGLE_SECRET;
+
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      if (!email_verified)
+        return res.status(400).json({ msg: "Email verification failed." });
+
+      const user = await Users.findOne({ email });
+
+      if (user) {
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch)
+          return res.status(400).json({ msg: "Password is incorrect." });
+
+        const refresh_token = createRefreshToken({ id: user._id });
+        res.cookie("refreshtoken", refresh_token, {
+          httpOnly: true,
+          path: "/user/refresh_token",
+          maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        });
+
+        res.json({ msg: "Login success!" });
+      } else {
+        const newUser = new Users({
+          name,
+          email,
+          password: passwordHash,
+          avatar: picture,
+        });
+
+        await newUser.save();
+
+        const refresh_token = createRefreshToken({ id: newUser._id });
+        res.cookie("refreshtoken", refresh_token, {
+          httpOnly: true,
+          path: "/user/refresh_token",
+          maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        });
+
+        res.json({ msg: "Login success!" });
+      }
     } catch (err) {
       return res.status(500).json({ msg: err.message });
     }
